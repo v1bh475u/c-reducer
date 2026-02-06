@@ -1,0 +1,6 @@
+# Cargo configuration for the slicer workspace
+
+# Force tests to run with a single thread because libclang
+# has a global singleton that prevents multiple instances.
+[env]
+RUST_TEST_THREADS = "1"
