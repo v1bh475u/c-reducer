@@ -1,0 +1,26 @@
+[package]
+name = "slicer-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Note: slicer-core is the base crate and should not depend on other slicer crates
+# to avoid circular dependencies
+
+# Parallelism (future goal)
+# rayon = { workspace = true }
+# dashmap = { workspace = true }
+# crossbeam = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
