@@ -1,0 +1,17 @@
+[package]
+name = "slicer-passes"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+slicer-core = { path = "../slicer-core" }
+slicer-parser = { path = "../slicer-parser" }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
