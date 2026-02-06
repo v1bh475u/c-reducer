@@ -1,0 +1,45 @@
+# Build artifacts
+/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Generated test outputs (csmith tests)
+tests/csmith_tests/*.orig
+tests/csmith_tests/*.reduced
+tests/csmith_tests/*.final
+tests/csmith_tests/test_reduced
+tests/csmith_tests/*.orig.stderr
+tests/csmith_tests/*.orig.stdout
+tests/csmith_tests/*.reduced.stderr
+tests/csmith_tests/*.reduced.stdout
+tests/csmith_tests/*.pp.c
+tests/csmith_tests/*.padded.c
+tests/csmith_tests/*.reduced.c
+tests/csmith_tests/*.final.c
+tests/csmith_tests/*.c
+tests/csmith_tests/results.log
+
+# Platform-specific generated files
+platform.info
+tests/csmith_tests/platform.info
+
+# Binary documents
+docs/*.pdf
+
+# Temporary files
+*.tmp
+*.bak
