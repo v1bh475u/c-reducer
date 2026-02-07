@@ -1,7 +1,3 @@
-//! Utility Functions
-//!
-//! Shared helpers used by reduction passes.
-
 use slicer_parser::ByteRange;
 
 pub fn extend_to_line(source: &str, range: ByteRange) -> ByteRange {
