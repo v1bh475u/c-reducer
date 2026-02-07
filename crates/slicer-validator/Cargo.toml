@@ -10,15 +10,8 @@ slicer-core = { path = "../slicer-core" }
 slicer-parser = { path = "../slicer-parser" }
 
 thiserror = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-
 tempfile = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-glob = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
