@@ -1,5 +1,3 @@
-//! Source location and byte range types.
-
 use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -12,22 +10,6 @@ impl ByteRange {
     pub fn new(start: usize, end: usize) -> Self {
         debug_assert!(start <= end, "start must be <= end");
         Self { start, end }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.start == self.end
-    }
-
-    pub fn len(&self) -> usize {
-        self.end - self.start
-    }
-
-    pub fn contains(&self, offset: usize) -> bool {
-        offset >= self.start && offset < self.end
-    }
-
-    pub fn overlaps(&self, other: &ByteRange) -> bool {
-        self.start < other.end && other.start < self.end
     }
 
     pub fn extract<'a>(&self, source: &'a str) -> Option<&'a str> {
@@ -58,17 +40,13 @@ mod tests {
     #[test]
     fn test_byte_range() {
         let range = ByteRange::new(10, 20);
-        assert_eq!(range.len(), 10);
-        assert!(!range.is_empty());
-        assert!(range.contains(15));
+        assert_eq!(range.extract("0123456789abcdefghij"), Some("abcdefghij"));
     }
 
     #[test]
-    fn test_range_overlap() {
-        let a = ByteRange::new(10, 20);
-        let b = ByteRange::new(15, 25);
-        let c = ByteRange::new(25, 30);
-        assert!(a.overlaps(&b));
-        assert!(!a.overlaps(&c));
+    fn test_to_range() {
+        let range = ByteRange::new(5, 15);
+        let std_range: Range<usize> = range.into();
+        assert_eq!(std_range, 5..15);
     }
 }
