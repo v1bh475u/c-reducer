@@ -11,13 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 slicer-core = { path = "../slicer-core" }
-slicer-parser = { path = "../slicer-parser" }
 slicer-passes = { path = "../slicer-passes" }
 slicer-validator = { path = "../slicer-validator" }
 
 clap = { workspace = true }
 anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }

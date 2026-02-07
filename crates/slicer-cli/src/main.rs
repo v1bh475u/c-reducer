@@ -1,73 +1,93 @@
-//! C Program Slicer CLI
-//!
-//! Command-line interface for the C program slicer.
-
-mod commands;
-
 use anyhow::Result;
-use clap::{Parser, Subcommand};
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
+use clap::Parser;
+use std::path::PathBuf;
 
-/// C Program Slicer - Reduce C programs while preserving behavior
+use slicer_core::pipeline::Pipeline;
+use slicer_passes::all_passes;
+use slicer_validator::cycles::measure_cycles;
+use slicer_validator::{CompilerConfig, LineCoverage, Oracle, OracleConfig, TimeoutConfig};
+
 #[derive(Parser)]
-#[command(name = "slicer")]
-#[command(author, version, about, long_about = None)]
+#[command(name = "slicer", about = "Reduce C programs while preserving behavior")]
 struct Cli {
-    /// Verbosity level (-v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose: u8,
+    source: PathBuf,
 
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    format: String,
+    #[arg(short, long, default_value_t = 100)]
+    iterations: u32,
 
-    #[command(subcommand)]
-    command: Commands,
-}
+    #[arg(short, long, default_value_t = 5)]
+    timeout: u64,
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Reduce a C source file
-    Reduce(commands::ReduceArgs),
+    #[arg(long)]
+    no_coverage: bool,
 
-    /// Validate that a reduced file is equivalent to the original
-    Validate(commands::ValidateArgs),
-
-    /// Parse and analyze a C source file
-    Parse(commands::ParseArgs),
-
-    /// List available reduction passes
-    Passes,
-
-    /// Generate a default configuration file
-    Init(commands::InitArgs),
+    #[arg(short = 'f', long = "flag")]
+    flags: Vec<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Set up logging
-    let log_level = match cli.verbose {
-        0 => Level::WARN,
-        1 => Level::INFO,
-        2 => Level::DEBUG,
-        _ => Level::TRACE,
+    let source = std::fs::read_to_string(&cli.source)?;
+    let original_size = source.len();
+
+    let mut compiler_config = CompilerConfig::default();
+    for flag in &cli.flags {
+        compiler_config = compiler_config.with_flag(flag);
+    }
+
+    let oracle_config = OracleConfig {
+        compiler: compiler_config,
+        timeout: TimeoutConfig::new(cli.timeout),
+        check_coverage: !cli.no_coverage,
+        ..Default::default()
     };
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .with_target(false)
-        .finish();
+    let mut oracle = Oracle::new(oracle_config)?;
+    oracle.initialize(&source)?;
 
-    tracing::subscriber::set_global_default(subscriber)?;
+    let coverage_data = oracle.original_coverage().map(|report| {
+        let mut line_hits = std::collections::HashMap::new();
+        for (&line, cov) in &report.lines {
+            if let LineCoverage::Executed(count) = cov {
+                line_hits.insert(line as u32, *count);
+            }
+        }
+        slicer_core::CoverageData {
+            line_hits,
+            function_hits: std::collections::HashMap::new(),
+        }
+    });
 
-    // Dispatch to command handlers
-    match cli.command {
-        Commands::Reduce(args) => commands::reduce(args, &cli.format),
-        Commands::Validate(args) => commands::validate(args),
-        Commands::Parse(args) => commands::parse(args),
-        Commands::Passes => commands::list_passes(),
-        Commands::Init(args) => commands::init(args),
+    let passes = all_passes();
+    let pipeline = Pipeline::new(passes, cli.iterations);
+    let reduced = pipeline.reduce(&source, coverage_data.as_ref(), &mut |candidate| {
+        oracle.validate(candidate).unwrap_or(false)
+    });
+
+    let output_path = cli.source.with_extension("reduced.c");
+    std::fs::write(&output_path, &reduced)?;
+    let reduced_size = reduced.len();
+
+    let original_cycles = measure_cycles(&cli.source);
+    let reduced_cycles = measure_cycles(&output_path);
+
+    println!("Input:    {}", cli.source.display());
+    println!("Output:   {}", output_path.display());
+    println!(
+        "Size:     {} -> {} bytes ({:.1}% reduction)",
+        original_size,
+        reduced_size,
+        (1.0 - reduced_size as f64 / original_size as f64) * 100.0
+    );
+    if let (Some(orig), Some(red)) = (original_cycles, reduced_cycles) {
+        println!(
+            "Cycles:   {} -> {} ({:.1}% reduction)",
+            orig,
+            red,
+            (1.0 - red as f64 / orig as f64) * 100.0
+        );
     }
+
+    Ok(())
 }
