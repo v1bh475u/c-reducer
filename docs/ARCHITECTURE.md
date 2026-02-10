@@ -2,81 +2,86 @@
 
 ## Overview
 
-A C program reducer written in Rust. Uses libclang for parsing and validates reductions by compiling and running the modified source.
+A C program reducer written in Rust. Uses libclang for parsing, clangd for LSP-based diagnostics, and validates reductions by compiling, running, and optionally comparing coverage of the modified source.
 
 ## Crate Structure
 
 ```
 crates/
-├── slicer-core/        # Core types and pipeline
-│   ├── config.rs       # PipelineConfig
-│   ├── context.rs      # Reduction context
-│   ├── pass.rs         # ReductionPass trait, Candidate
-│   ├── pipeline.rs     # Pipeline orchestrator
-│   └── result.rs       # ReductionResult
+├── slicer-core/          # Core types and pipeline (zero external deps)
+│   ├── context.rs        # CoverageData
+│   ├── pass.rs           # ReductionPass trait, Candidate
+│   └── pipeline.rs       # Pipeline orchestrator
 │
-├── slicer-parser/      # C parsing with libclang
-│   ├── ast.rs          # AST node types
-│   ├── lib.rs          # CParser, ParsedUnit
-│   ├── span.rs         # ByteRange utilities
-│   └── error.rs        # ParseError
+├── slicer-parser/        # C parsing with libclang
+│   ├── ast.rs            # CParser, ParsedUnit, Function, Declaration, Statement
+│   ├── error.rs          # ParseError
+│   └── span.rs           # ByteRange utilities
 │
-├── slicer-passes/      # Pass implementations
-│   ├── dead_function.rs  # Priority 100
-│   ├── dead_code.rs      # Priority 90
-│   ├── statement.rs      # Priority 70
-│   ├── include.rs        # Priority 60
-│   ├── typedef.rs        # Priority 50
-│   ├── expression.rs     # Priority 30
-│   └── util.rs           # Shared utilities
+├── slicer-passes/        # Pass implementations
+│   ├── clangd.rs         # clangd LSP diagnostic client
+│   ├── dead_function.rs  # Remove uncalled functions
+│   ├── dead_code.rs      # Remove unexecuted code (coverage-based)
+│   ├── unused_variable.rs# Remove unused variables (clangd-based)
+│   ├── statement_merge.rs# Merge consecutive statements
+│   ├── typedef.rs        # Remove typedef declarations
+│   ├── header_removal.rs # Remove unused includes (clangd-based)
+│   └── util.rs           # Line-extension utilities
 │
-├── slicer-validator/   # Validation
-│   ├── compiler.rs     # Compiler abstraction
-│   ├── executor.rs     # Program execution
-│   ├── oracle.rs       # Validation oracle
-│   └── coverage.rs     # gcov integration
+├── slicer-validator/     # Validation
+│   ├── compiler.rs       # GCC compiler wrapper
+│   ├── executor.rs       # Binary execution with timeout
+│   ├── oracle.rs         # Validation oracle (compile + run + compare)
+│   ├── coverage.rs       # gcov coverage analysis
+│   ├── cycles.rs         # perf stat CPU cycle measurement
+│   └── error.rs          # ValidationError types
 │
-└── slicer-cli/         # CLI
-    ├── main.rs         # Entry point, clap setup
-    └── commands.rs     # Command implementations
+└── slicer-cli/           # CLI (single-file binary)
+    └── main.rs           # Entry point, clap setup, reduction flow
 ```
 
 ## Key Components
 
 ### Pipeline
 
-Runs passes serially in priority order (higher priority first) until convergence:
+Runs all passes sequentially up to `max_iterations` times until convergence:
 
 ```rust
 pub struct Pipeline {
-    config: PipelineConfig,
     passes: Vec<Box<dyn ReductionPass>>,
+    max_iterations: u32,
 }
 
 impl Pipeline {
-    pub fn reduce(&self, source: &str, ctx: &mut Context) -> Result<ReductionResult> {
+    pub fn reduce(
+        &self,
+        source: &str,
+        coverage: Option<&CoverageData>,
+        oracle: &mut dyn FnMut(&str) -> bool,
+    ) -> String {
         let mut current = source.to_string();
-        
-        loop {
+
+        for _ in 0..self.max_iterations {
             let mut made_progress = false;
-            
-            for pass in &self.passes {  // Sorted by priority descending
-                let candidates = pass.apply(&current);
-                
+
+            for pass in &self.passes {
+                let candidates = pass.apply(&current, coverage);
+                // Sort candidates back-to-front by range.start
+                // Apply greedily: if oracle approves, keep the reduction
                 for candidate in candidates {
                     if let Some(reduced) = candidate.apply(&current) {
-                        if oracle.validate(&reduced)? {
+                        if oracle(&reduced) {
                             current = reduced;
                             made_progress = true;
                         }
                     }
                 }
             }
-            
+
             if !made_progress { break; }
         }
-        
-        Ok(ReductionResult::new(source, &current))
+
+        current
     }
 }
 ```
@@ -85,11 +90,11 @@ impl Pipeline {
 
 ```rust
 pub trait ReductionPass: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn priority(&self) -> u32;  // Higher = runs first
-    fn apply(&self, source: &str) -> Vec<Candidate>;
+    fn apply(&self, source: &str, coverage: Option<&CoverageData>) -> Vec<Candidate>;
 }
 ```
+
+Passes receive optional `CoverageData` (line/function execution counts) and return a list of `Candidate` reductions to try.
 
 ### Candidate
 
@@ -97,13 +102,14 @@ Represents a potential reduction (removal or replacement):
 
 ```rust
 pub struct Candidate {
-    pub description: String,
     pub range: Range<usize>,
     pub replacement: String,
-    pub confidence: f64,
 }
 
 impl Candidate {
+    pub fn removal(range: Range<usize>) -> Self;
+    pub fn new(range: Range<usize>, replacement: impl Into<String>) -> Self;
+
     pub fn apply(&self, source: &str) -> Option<String> {
         let mut result = String::new();
         result.push_str(&source[..self.range.start]);
@@ -116,44 +122,65 @@ impl Candidate {
 
 ### Parser (libclang)
 
-Uses thread-local Clang instance due to libclang's single-instance constraint:
+Uses a thread-local Clang instance. Writes source to a temp file, parses with `-std=c11 -ferror-limit=0`, and recursively visits the AST.
 
 ```rust
-thread_local! {
-    static CLANG: Clang = Clang::new().expect("Failed to initialize libclang");
+pub struct CParser {
+    temp_dir: TempDir,
+    args: Vec<String>,
 }
 
-pub struct CParser;
-
 impl CParser {
-    pub fn parse(&self, source: &str) -> Result<ParsedUnit, ParseError> {
-        CLANG.with(|clang| { /* parse using clang */ })
-    }
+    pub fn new() -> ParseResult<Self>;
+    pub fn with_args(self, args: impl IntoIterator<Item = impl Into<String>>) -> Self;
+    pub fn with_includes(self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Self;
+    pub fn parse(&self, source: &str) -> ParseResult<ParsedUnit>;
 }
 ```
 
-**Note**: Tests must run with `--test-threads=1`.
+`ParsedUnit` provides access to functions, declarations, function calls, includes, typedefs, statements, and the `header_end` byte offset (where the first function definition begins).
+
+**Note**: Tests must run with `--test-threads=1` due to libclang's single-instance constraint.
 
 ### Oracle
 
-Validates that reduced code preserves behavior:
+Validates that reduced code preserves behavior through a multi-stage pipeline:
 
 ```rust
 pub struct Oracle {
+    config: OracleConfig,
     compiler: Compiler,
     executor: Executor,
-    expected_output: String,
-    timeout: Duration,
+    parser: CParser,
+    original_coverage: Option<CoverageReport>,
 }
 
 impl Oracle {
-    pub fn validate(&self, source: &str) -> Result<bool> {
-        let binary = self.compiler.compile(source)?;
-        let output = self.executor.run(&binary, self.timeout)?;
-        Ok(output == self.expected_output)
+    pub fn initialize(&mut self, original_source: &str) -> ValidationResult<()>;
+
+    pub fn validate(&mut self, reduced_source: &str) -> ValidationResult<bool> {
+        // 1. Parse with CParser → reject if has_errors()
+        // 2. Compile with GCC → reject if fails
+        // 3. Execute with timeout → reject if timeout/incomplete
+        // 4. Compare stdout, stderr, exit_code against expected
+        // 5. If check_coverage: compile with --coverage, run, collect
+        //    gcov, compare with missing_coverage → reject if any
+        //    originally-executed lines are missing
     }
 }
 ```
+
+### clangd LSP Integration
+
+Some passes leverage clangd's diagnostic engine for precise analysis:
+
+```rust
+// crates/slicer-passes/src/clangd.rs
+pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic>;
+pub fn lines_with_code(source: &str, code: &str, extra_flags: &[&str]) -> HashSet<usize>;
+```
+
+Spawns a clangd subprocess, sends LSP `initialize` + `textDocument/didOpen`, waits for `publishDiagnostics` notifications, and parses them. Used by `UnusedVariablePass` and `HeaderRemovalPass`.
 
 ## Data Flow
 
@@ -161,35 +188,33 @@ impl Oracle {
 Source File
     │
     ▼
-CParser.parse() ──► ParsedUnit (functions, typedefs, includes, statements)
+Oracle.initialize() ──► Compile & run original, capture expected output
+    │                    Optionally collect coverage via gcov
+    ▼
+CoverageData (optional line/function execution counts)
     │
     ▼
-For each pass (by priority):
+Pipeline.reduce() loop (up to max_iterations):
     │
-    ├── pass.apply(source) ──► Vec<Candidate>
+    For each pass:
     │
-    └── For each candidate:
+    ├── pass.apply(source, coverage) ──► Vec<Candidate>
+    │   (may use CParser, clangd, or text-based scanning)
+    │
+    └── For each candidate (sorted back-to-front):
             │
             ├── candidate.apply(source) ──► modified source
-            ├── oracle.validate(modified) ──► compile & run
+            ├── oracle.validate(modified) ──► parse → compile → run → compare
             │
             └── If valid: source = modified
     │
     ▼
 Reduced Source
+    │
+    ▼
+(Optional) Cycle measurement via perf stat + padding
 ```
 
-## Configuration
+## CPU Cycle Preservation
 
-TOML-based configuration:
-
-```toml
-[validation]
-compiler = "gcc"
-compiler_flags = ["-O2"]
-timeout = 30
-
-[passes]
-enabled = ["dead_function", "dead_code", "statement"]
-max_iterations = 100
-```
+After reduction, the CLI optionally measures CPU cycles using `perf stat -e cpu-cycles` and can insert a busy-loop into `main()` to match the original program's cycle count within a configurable tolerance.
