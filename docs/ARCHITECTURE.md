@@ -11,10 +11,10 @@ crates/
 ├── slicer-core/          # Core types and pipeline (zero external deps)
 │   ├── context.rs        # CoverageData
 │   ├── pass.rs           # ReductionPass trait, Candidate
-│   └── pipeline.rs       # Pipeline orchestrator
+│   └── pipeline.rs       # Pipeline orchestrator (with total_timeout support)
 │
 ├── slicer-parser/        # C parsing with libclang
-│   ├── ast.rs            # CParser, ParsedUnit, Function, Declaration, Statement
+│   ├── ast.rs            # CParser, ParsedUnit, Function, Declaration, Statement, StructField
 │   ├── error.rs          # ParseError
 │   └── span.rs           # ByteRange utilities
 │
@@ -23,10 +23,14 @@ crates/
 │   ├── dead_function.rs  # Remove uncalled functions
 │   ├── dead_code.rs      # Remove unexecuted code (coverage-based)
 │   ├── unused_variable.rs# Remove unused variables (clangd-based)
+│   ├── argument_removal.rs # Remove unused params + update call sites (clangd-based)
+│   ├── global_removal.rs # Remove unreferenced global variables
+│   ├── struct_member_removal.rs # Remove unaccessed struct fields
 │   ├── statement_merge.rs# Merge consecutive statements
 │   ├── typedef.rs        # Remove typedef declarations
+│   ├── enum_struct_removal.rs # Remove unused enum/struct declarations
 │   ├── header_removal.rs # Remove unused includes (clangd-based)
-│   └── util.rs           # Line-extension utilities
+│   └── util.rs           # LineIndex, line-extension utilities
 │
 ├── slicer-validator/     # Validation
 │   ├── compiler.rs       # GCC compiler wrapper
@@ -44,45 +48,25 @@ crates/
 
 ### Pipeline
 
-Runs all passes sequentially up to `max_iterations` times until convergence:
+Runs all passes sequentially up to `max_iterations` times until convergence. Supports an optional `total_timeout` that halts reduction after a wall-clock duration.
 
 ```rust
 pub struct Pipeline {
     passes: Vec<Box<dyn ReductionPass>>,
     max_iterations: u32,
+    total_timeout: Option<Duration>,
 }
 
 impl Pipeline {
+    pub fn new(passes: Vec<Box<dyn ReductionPass>>, max_iterations: u32) -> Self;
+    pub fn with_total_timeout(self, seconds: u64) -> Self;
+
     pub fn reduce(
         &self,
         source: &str,
         coverage: Option<&CoverageData>,
         oracle: &mut dyn FnMut(&str) -> bool,
-    ) -> String {
-        let mut current = source.to_string();
-
-        for _ in 0..self.max_iterations {
-            let mut made_progress = false;
-
-            for pass in &self.passes {
-                let candidates = pass.apply(&current, coverage);
-                // Sort candidates back-to-front by range.start
-                // Apply greedily: if oracle approves, keep the reduction
-                for candidate in candidates {
-                    if let Some(reduced) = candidate.apply(&current) {
-                        if oracle(&reduced) {
-                            current = reduced;
-                            made_progress = true;
-                        }
-                    }
-                }
-            }
-
-            if !made_progress { break; }
-        }
-
-        current
-    }
+    ) -> String;
 }
 ```
 
@@ -138,7 +122,7 @@ impl CParser {
 }
 ```
 
-`ParsedUnit` provides access to functions, declarations, function calls, includes, typedefs, statements, and the `header_end` byte offset (where the first function definition begins).
+`ParsedUnit` provides access to functions, declarations, function calls, includes, typedefs, statements, struct fields, and the `header_end` byte offset (where the first function definition begins).
 
 **Note**: Tests must run with `--test-threads=1` due to libclang's single-instance constraint.
 
@@ -180,7 +164,7 @@ pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic>;
 pub fn lines_with_code(source: &str, code: &str, extra_flags: &[&str]) -> HashSet<usize>;
 ```
 
-Spawns a clangd subprocess, sends LSP `initialize` + `textDocument/didOpen`, waits for `publishDiagnostics` notifications, and parses them. Used by `UnusedVariablePass` and `HeaderRemovalPass`.
+Spawns a clangd subprocess, sends LSP `initialize` + `textDocument/didOpen`, waits for `publishDiagnostics` notifications, and parses them. Used by `UnusedVariablePass`, `ArgumentRemovalPass`, and `HeaderRemovalPass`.
 
 ## Data Flow
 
