@@ -159,14 +159,14 @@ impl ParsedUnit {
                     }
                 }
                 ctx.functions.push(Function::from_entity(entity, source));
-            }
+            },
             EntityKind::FunctionDecl if is_in_main_file && !entity.is_definition() => {
                 if !ctx.seen_function_def {
                     if let Some(ref range) = entity_range {
                         ctx.header_end = range.end;
                     }
                 }
-            }
+            },
             EntityKind::VarDecl
             | EntityKind::TypedefDecl
             | EntityKind::StructDecl
@@ -181,7 +181,7 @@ impl ParsedUnit {
                 if let Some(decl) = Declaration::from_entity(entity, source) {
                     ctx.declarations.push(decl);
                 }
-            }
+            },
             EntityKind::InclusionDirective if is_in_main_file => {
                 if let Some(range) = entity.get_range() {
                     let start = range.get_start().get_file_location();
@@ -189,17 +189,17 @@ impl ParsedUnit {
                     ctx.includes
                         .push(ByteRange::new(start.offset as usize, end.offset as usize));
                 }
-            }
+            },
             EntityKind::CallExpr => {
                 if let Some(referenced) = entity.get_reference() {
                     if let Some(name) = referenced.get_name() {
                         ctx.function_calls.insert(name);
                     }
                 }
-            }
+            },
             EntityKind::DeclRefExpr => {
                 // Still track for function call resolution
-            }
+            },
             EntityKind::CompoundStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -232,7 +232,7 @@ impl ParsedUnit {
                         }
                     }
                 }
-            }
+            },
             EntityKind::DeclStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -240,7 +240,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::ReturnStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -248,7 +248,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::IfStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     let has_else = entity.get_children().len() > 2;
@@ -257,7 +257,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::WhileStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -265,7 +265,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::ForStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -273,7 +273,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::DoStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -281,7 +281,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::SwitchStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -289,7 +289,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::BreakStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -297,7 +297,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::ContinueStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -305,7 +305,7 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
+            },
             EntityKind::NullStmt if is_in_main_file => {
                 if let Some(range) = entity_range {
                     ctx.statements.push(Statement {
@@ -313,8 +313,8 @@ impl ParsedUnit {
                         range,
                     });
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         for child in entity.get_children() {
@@ -347,6 +347,17 @@ impl ParsedUnit {
             .iter()
             .filter(|d| matches!(d.kind, DeclarationKind::Typedef { .. }))
             .cloned()
+            .collect()
+    }
+
+    pub fn struct_fields(&self) -> Vec<&StructField> {
+        self.declarations
+            .iter()
+            .filter_map(|d| match &d.kind {
+                DeclarationKind::Struct { fields } => Some(fields.iter()),
+                _ => None,
+            })
+            .flatten()
             .collect()
     }
 
@@ -474,15 +485,41 @@ impl Declaration {
                     .map(TypeInfo::from_type)
                     .unwrap_or_else(TypeInfo::void);
                 DeclarationKind::Variable { type_info }
-            }
+            },
             EntityKind::TypedefDecl => {
                 let underlying = entity
                     .get_typedef_underlying_type()
                     .map(TypeInfo::from_type)
                     .unwrap_or_else(TypeInfo::void);
                 DeclarationKind::Typedef { underlying }
-            }
-            EntityKind::StructDecl => DeclarationKind::Struct,
+            },
+            EntityKind::StructDecl => {
+                // Collect struct fields
+                let fields: Vec<StructField> = entity
+                    .get_children()
+                    .iter()
+                    .filter(|child| child.get_kind() == EntityKind::FieldDecl)
+                    .filter_map(|child| {
+                        let field_name = child.get_name()?;
+                        let field_range = child.get_range().map(|r| {
+                            let start = r.get_start().get_file_location();
+                            let end = r.get_end().get_file_location();
+                            ByteRange::new(start.offset as usize, end.offset as usize)
+                        })?;
+                        let type_info = child
+                            .get_type()
+                            .map(TypeInfo::from_type)
+                            .unwrap_or_else(TypeInfo::void);
+                        Some(StructField {
+                            struct_name: name.clone(),
+                            name: field_name,
+                            type_info,
+                            range: field_range,
+                        })
+                    })
+                    .collect();
+                DeclarationKind::Struct { fields }
+            },
             EntityKind::EnumDecl => DeclarationKind::Enum,
             _ => return None,
         };
@@ -504,8 +541,17 @@ impl Declaration {
 pub enum DeclarationKind {
     Variable { type_info: TypeInfo },
     Typedef { underlying: TypeInfo },
-    Struct,
+    Struct { fields: Vec<StructField> },
     Enum,
+}
+
+/// A field within a struct declaration.
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub struct_name: String,
+    pub name: String,
+    pub type_info: TypeInfo,
+    pub range: ByteRange,
 }
 
 #[derive(Debug, Clone)]
