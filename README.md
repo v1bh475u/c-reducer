@@ -1,23 +1,28 @@
 # C Program Slicer
 
-A C program reducer written in Rust. Minimizes C source code while preserving specified behavior.
+A C program reducer written in Rust. Minimizes C source code while preserving specified behavior, including compilation, output, and optionally code coverage.
 
 ## Features
 
-- **libclang-based parsing**: Full C language support including macros and typedefs
-- **Six reduction passes**: Dead function/code removal, statement/include/typedef removal, expression simplification
-- **Validation**: Ensures reduced code compiles and produces expected output
-- **Configurable**: TOML-based configuration
+- **libclang-based parsing**: Full C language support including macros, typedefs, and complex declarations
+- **clangd LSP integration**: Precise unused variable and unused include detection via clangd diagnostics
+- **Six reduction passes**: Dead function/code removal, unused variable removal, statement merging, typedef removal, header removal
+- **Coverage-aware reduction**: Uses gcov to ensure reduced code preserves execution coverage
+- **CPU cycle measurement**: Optional `perf stat` integration to measure and preserve cycle counts
+- **Validation oracle**: Multi-stage validation (parse → compile → run → compare output → compare coverage)
 
 ## Prerequisites
 
 - **Rust 1.70+**
 - **LLVM/Clang 14+** (for libclang)
+- **clangd** (for unused variable and header detection)
 - **GCC** (for compilation/validation)
+- **gcov** (for coverage analysis, optional)
+- **perf** (for cycle measurement, optional)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install llvm-14 libclang-14-dev clang-14 gcc
+sudo apt install llvm-14 libclang-14-dev clang-14 clangd-14 gcc
 
 # macOS
 brew install llvm
@@ -33,76 +38,68 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# Generate config
-slicer init -o slicer.toml
+# Basic reduction
+slicer program.c
 
-# Run reduction
-slicer reduce -i program.c -o reduced.c --policy aggressive
+# With more iterations and longer timeout
+slicer program.c --iterations 200 --timeout 10
 
-# With verbose output
-slicer reduce -i program.c -o reduced.c -v
+# Without coverage checking (faster)
+slicer program.c --no-coverage
+
+# With extra compiler flags
+slicer program.c -f "-O2" -f "-std=c11"
 ```
 
-## CLI Commands
+Output is written to `program.reduced.c` alongside the input file.
 
-| Command | Description |
-|---------|-------------|
-| `slicer reduce` | Run reduction passes on a C program |
-| `slicer validate` | Check if reduced file matches original behavior |
-| `slicer parse` | Parse a C file and display AST info |
-| `slicer passes` | List available reduction passes |
-| `slicer init` | Generate a configuration file |
+## CLI Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `<source>` | | | Input C source file (positional, required) |
+| `--iterations` | `-i` | 100 | Maximum reduction iterations |
+| `--timeout` | `-t` | 5 | Per-execution timeout in seconds |
+| `--no-coverage` | | false | Disable coverage-based validation |
+| `--flag` | `-f` | | Extra compiler flag (repeatable) |
 
 ## Reduction Passes
 
-| Pass | Priority | Description |
-|------|----------|-------------|
-| `dead_function` | 100 | Removes uncalled functions |
-| `dead_code` | 90 | Removes dead code (post-return, unreachable branches) |
-| `statement` | 70 | Removes individual statements |
-| `include` | 60 | Removes unnecessary #include directives |
-| `typedef` | 50 | Removes unused typedef declarations |
-| `expression` | 30 | Simplifies expressions |
+| # | Pass | Description | Analysis Method |
+|---|------|-------------|-----------------|
+| 1 | `DeadFunctionPass` | Removes uncalled functions | libclang parser |
+| 2 | `DeadCodePass` | Removes unexecuted code | gcov coverage |
+| 3 | `UnusedVariablePass` | Removes unused variables | clangd LSP |
+| 4 | `StatementMergePass` | Merges consecutive statements | libclang parser |
+| 5 | `TypedefPass` | Removes typedef declarations | Text scan |
+| 6 | `HeaderRemovalPass` | Removes unused `#include` directives | clangd LSP |
 
-Passes run serially in priority order (highest first). Each generates candidates that are validated before being applied.
+Passes run sequentially. Each generates candidates that are validated by the oracle before being applied. The pipeline iterates until no more reductions succeed.
 
 ## Project Structure
 
 ```
 crates/
-├── slicer-cli/       # Command-line interface
-├── slicer-core/      # Core types, traits (ReductionPass), and Pipeline
-├── slicer-parser/    # libclang-based C parser
-├── slicer-passes/    # Pass implementations
-└── slicer-validator/ # Compilation and execution validation
-```
-
-## Configuration
-
-```toml
-[source]
-file = "input.c"
-
-[output]
-file = "output.c"
-
-[validation]
-compiler = "gcc"
-compiler_flags = ["-O2"]
-timeout = 30
-
-[passes]
-enabled = ["all"]
-max_iterations = 100
+├── slicer-cli/         # CLI binary (single file)
+├── slicer-core/        # Core types: ReductionPass trait, Candidate, Pipeline
+├── slicer-parser/      # libclang-based C parser
+├── slicer-passes/      # Pass implementations + clangd integration
+└── slicer-validator/   # Oracle, compiler, executor, coverage, cycle measurement
 ```
 
 ## Testing
 
 ```bash
 # Tests must run single-threaded due to libclang constraints
-cargo test --test-threads=1
+cargo test -- --test-threads=1
 ```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — System design, data flow, and key components
+- [API Reference](docs/API.md) — Public types, traits, and usage examples
+- [Reduction Passes](docs/PASSES.md) — Detailed pass descriptions and implementation notes
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)
