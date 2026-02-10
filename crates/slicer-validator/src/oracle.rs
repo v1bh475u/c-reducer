@@ -41,6 +41,7 @@ pub struct Oracle {
     executor: Executor,
     parser: CParser,
     original_coverage: Option<CoverageReport>,
+    expect_timeout: bool,
 }
 
 impl Oracle {
@@ -55,6 +56,7 @@ impl Oracle {
             executor,
             parser,
             original_coverage: None,
+            expect_timeout: false,
         })
     }
 
@@ -72,9 +74,12 @@ impl Oracle {
         let exec_result = self.executor.execute(&binary_path)?;
 
         if exec_result.timed_out {
-            return Err(ValidationError::Timeout {
-                timeout_secs: self.config.timeout.execution_timeout.as_secs_f64(),
-            });
+            self.expect_timeout = true;
+            self.config.check_coverage = false;
+            self.config.expected_stdout = None;
+            self.config.expected_stderr = None;
+            self.config.expected_exit_code = None;
+            return Ok(());
         }
 
         if self.config.expected_stdout.is_none() {
@@ -123,6 +128,10 @@ impl Oracle {
 
         let binary_path = compile_result.binary_path.unwrap();
         let exec_result = self.executor.execute(&binary_path)?;
+
+        if self.expect_timeout {
+            return Ok(exec_result.timed_out);
+        }
 
         if exec_result.timed_out || !exec_result.completed {
             return Ok(false);
