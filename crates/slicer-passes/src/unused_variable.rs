@@ -3,7 +3,7 @@ use slicer_core::pass::{Candidate, ReductionPass};
 use slicer_parser::{CParser, StatementKind};
 
 use crate::clangd;
-use crate::util::extend_to_line;
+use crate::util::{extend_to_line, LineIndex};
 
 #[derive(Debug, Default)]
 pub struct UnusedVariablePass;
@@ -21,7 +21,10 @@ fn is_simple_assignment_to(text: &str, var_name: &str) -> bool {
             return false;
         }
         let before_eq = trimmed.as_bytes()[eq_pos - 1];
-        if matches!(before_eq, b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'!' | b'<' | b'>') {
+        if matches!(
+            before_eq,
+            b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'!' | b'<' | b'>'
+        ) {
             return false;
         }
         if trimmed.as_bytes().get(eq_pos + 1) == Some(&b'=') {
@@ -61,12 +64,10 @@ impl ReductionPass for UnusedVariablePass {
         };
 
         let mut candidates = Vec::new();
+        let line_index = LineIndex::new(source);
 
         for stmt in unit.statements() {
-            let stmt_start_line = source[..stmt.range.start]
-                .chars()
-                .filter(|&c| c == '\n')
-                .count();
+            let stmt_start_line = line_index.line_of(stmt.range.start) - 1; // clangd uses 0-based lines
 
             match stmt.kind {
                 StatementKind::Declaration => {
@@ -74,7 +75,7 @@ impl ReductionPass for UnusedVariablePass {
                         let extended = extend_to_line(source, stmt.range);
                         candidates.push(Candidate::removal(extended.to_range()));
                     }
-                }
+                },
                 StatementKind::Expression if !set_but_unused_names.is_empty() => {
                     if let Some(text) = stmt.range.extract(source) {
                         for var_name in &set_but_unused_names {
@@ -85,8 +86,8 @@ impl ReductionPass for UnusedVariablePass {
                             }
                         }
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -135,19 +136,31 @@ mod tests {
                 .map(|r| !r.contains("int y"))
                 .unwrap_or(false)
         });
-        assert!(has_y_decl_removal, "should remove set-but-unused variable y declaration");
+        assert!(
+            has_y_decl_removal,
+            "should remove set-but-unused variable y declaration"
+        );
         let has_y_assign_removal = candidates.iter().any(|c| {
             c.apply(source)
                 .map(|r| !r.contains("y = 3"))
                 .unwrap_or(false)
         });
-        assert!(has_y_assign_removal, "should remove assignment to set-but-unused variable y");
+        assert!(
+            has_y_assign_removal,
+            "should remove assignment to set-but-unused variable y"
+        );
     }
 
     #[test]
     fn test_extract_var_name() {
-        assert_eq!(extract_var_name("Variable 'foo' set but not used"), Some("foo".to_string()));
-        assert_eq!(extract_var_name("Unused variable 'bar'"), Some("bar".to_string()));
+        assert_eq!(
+            extract_var_name("Variable 'foo' set but not used"),
+            Some("foo".to_string())
+        );
+        assert_eq!(
+            extract_var_name("Unused variable 'bar'"),
+            Some("bar".to_string())
+        );
         assert_eq!(extract_var_name("no quotes here"), None);
     }
 
