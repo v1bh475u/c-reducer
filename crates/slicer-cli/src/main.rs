@@ -10,13 +10,20 @@ use slicer_validator::{CompilerConfig, LineCoverage, Oracle, OracleConfig, Timeo
 #[derive(Parser)]
 #[command(name = "slicer", about = "Reduce C programs while preserving behavior")]
 struct Cli {
-    source: PathBuf,
+    #[arg(short, long)]
+    input: PathBuf,
 
-    #[arg(short, long, default_value_t = 100)]
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 100)]
     iterations: u32,
 
     #[arg(short, long, default_value_t = 5)]
     timeout: u64,
+
+    #[arg(long, default_value_t = 0)]
+    total_timeout: u64,
 
     #[arg(long)]
     no_coverage: bool,
@@ -28,7 +35,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let source = std::fs::read_to_string(&cli.source)?;
+    let source = std::fs::read_to_string(&cli.input)?;
     let original_size = source.len();
 
     let mut compiler_config = CompilerConfig::default();
@@ -60,19 +67,22 @@ fn main() -> Result<()> {
     });
 
     let passes = all_passes();
-    let pipeline = Pipeline::new(passes, cli.iterations);
+    let pipeline = Pipeline::new(passes, cli.iterations).with_total_timeout(cli.total_timeout);
     let reduced = pipeline.reduce(&source, coverage_data.as_ref(), &mut |candidate| {
         oracle.validate(candidate).unwrap_or(false)
     });
 
-    let output_path = cli.source.with_extension("reduced.c");
+    let output_path = match &cli.output {
+        Some(p) => p.clone(),
+        None => cli.input.with_extension("reduced.c"),
+    };
     std::fs::write(&output_path, &reduced)?;
     let reduced_size = reduced.len();
 
-    let original_cycles = measure_cycles(&cli.source);
+    let original_cycles = measure_cycles(&cli.input);
     let reduced_cycles = measure_cycles(&output_path);
 
-    println!("Input:    {}", cli.source.display());
+    println!("Input:    {}", cli.input.display());
     println!("Output:   {}", output_path.display());
     println!(
         "Size:     {} -> {} bytes ({:.1}% reduction)",
