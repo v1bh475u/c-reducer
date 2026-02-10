@@ -2,7 +2,7 @@ use slicer_core::context::CoverageData;
 use slicer_core::pass::{Candidate, ReductionPass};
 use slicer_parser::{CParser, StatementKind};
 
-use crate::util::extend_to_line;
+use crate::util::{extend_to_line, LineIndex};
 
 #[derive(Debug, Default)]
 pub struct DeadCodePass;
@@ -20,6 +20,7 @@ impl ReductionPass for DeadCodePass {
             Err(_) => return Vec::new(),
         };
 
+        let line_index = LineIndex::new(source);
         let header_end = unit.header_end();
         let mut candidates = Vec::new();
         let mut dead_ranges: Vec<(usize, usize)> = Vec::new();
@@ -32,8 +33,8 @@ impl ReductionPass for DeadCodePass {
                 continue;
             }
 
-            let start_line = byte_offset_to_line(source, stmt.range.start);
-            let end_line = byte_offset_to_line(source, stmt.range.end);
+            let start_line = line_index.line_of(stmt.range.start);
+            let end_line = line_index.line_of(stmt.range.end);
 
             let has_any_executed =
                 (start_line..=end_line).any(|line| coverage.is_line_executed(line as u32));
@@ -41,8 +42,8 @@ impl ReductionPass for DeadCodePass {
                 continue;
             }
 
-            let has_executable = (start_line..=end_line)
-                .any(|line| coverage.line_hits.contains_key(&(line as u32)));
+            let has_executable =
+                (start_line..=end_line).any(|line| coverage.line_hits.contains_key(&(line as u32)));
             if !has_executable {
                 continue;
             }
@@ -78,14 +79,6 @@ impl ReductionPass for DeadCodePass {
 
         candidates
     }
-}
-
-fn byte_offset_to_line(source: &str, offset: usize) -> usize {
-    source[..offset.min(source.len())]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count()
-        + 1
 }
 
 #[cfg(test)]
