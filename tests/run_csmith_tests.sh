@@ -228,7 +228,7 @@ run_test() {
     
     # Run reducer
     local reducer_output="$TEST_DIR/${test_name}.reducer.log"
-    if ! timeout 120s "$SLICER" reduce -i "$pp_file" -o "$reduced_file" --no-coverage --timeout $TIMEOUT_SECS --total-timeout 60 > "$reducer_output" 2>&1; then
+    if ! timeout 120s "$SLICER" -i "$pp_file" -o "$reduced_file" --no-coverage --timeout $TIMEOUT_SECS --total-timeout 60 > "$reducer_output" 2>&1; then
         echo "SKIP reducer_failed $(tail -1 $reducer_output 2>/dev/null)" > "$result_file"
         rm -f "$src_file" "$pp_file" "$orig_bin" "$orig_stdout" "$orig_stderr" "$reducer_output"
         return 0
