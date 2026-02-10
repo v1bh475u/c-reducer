@@ -9,16 +9,17 @@ Main entry point for program reduction.
 ```rust
 use slicer_core::{Pipeline, CoverageData};
 
-let pipeline = Pipeline::new(slicer_passes::all_passes(), 100);
+let pipeline = Pipeline::new(slicer_passes::all_passes(), 100)
+    .with_total_timeout(60);
 
-// Optional: provide coverage data for coverage-aware passes
 let coverage: Option<&CoverageData> = None;
 
-// Oracle is a closure: &str -> bool
 let result = pipeline.reduce(&source, coverage, &mut |reduced| {
     oracle.validate(reduced).unwrap_or(false)
 });
 ```
+
+`with_total_timeout(seconds)` sets a wall-clock deadline across all iterations; the pipeline checks it at the iteration, pass, and candidate levels and stops when exceeded.
 
 ### ReductionPass Trait
 
@@ -68,10 +69,10 @@ Validates that reductions preserve behavior.
 use slicer_validator::{Oracle, OracleConfig, CompilerConfig, TimeoutConfig};
 
 let config = OracleConfig {
-    compiler: CompilerConfig::default(),  // gcc -w
-    timeout: TimeoutConfig::new(5),       // 5-second execution timeout
+    compiler: CompilerConfig::default(),
+    timeout: TimeoutConfig::new(5),
     check_coverage: true,
-    expected_stdout: None,   // captured from original during initialize()
+    expected_stdout: None,
     expected_stderr: None,
     expected_exit_code: None,
 };
@@ -104,11 +105,11 @@ GCC-based compiler wrapper.
 ```rust
 use slicer_validator::{Compiler, CompilerConfig};
 
-let config = CompilerConfig::default()      // gcc -w
+let config = CompilerConfig::default()
     .with_flag("-O2")
     .with_flags(["-std=c11", "-pedantic"])
     .with_include("/usr/local/include")
-    .with_coverage();                       // adds --coverage -fprofile-arcs -ftest-coverage
+    .with_coverage();
 
 let mut compiler = Compiler::with_config(config)?;
 let result = compiler.compile(&source)?;
@@ -147,7 +148,6 @@ let report = analyzer.collect(&source_file)?;
 println!("Coverage: {:.1}%", report.coverage_percentage());
 println!("Line 10 executed: {}", report.is_line_executed(10));
 
-// Compare coverage between original and reduced
 let missing = missing_coverage(&original_report, &reduced_report);
 ```
 
@@ -162,7 +162,6 @@ if let Some(cycles) = measure_cycles(&binary_path) {
     println!("CPU cycles: {}", cycles);
 }
 
-// Insert busy-loop to match original cycle count
 if let Some(padded) = pad_for_cycles(&reduced_source, original_cycles, reduced_cycles, 5.0) {
     // padded source has a busy-loop in main()
 }
@@ -182,7 +181,6 @@ let parser = parser
 
 let unit = parser.parse(&source)?;
 
-// Access parsed data
 for func in unit.functions() {
     println!("Function: {} ({:?})", func.name, func.range);
     println!("  Returns: {} (ptr={})", func.return_type.name, func.return_type.is_pointer);
@@ -199,6 +197,10 @@ for stmt in unit.statements() {
     println!("Statement: {:?} at {:?}", stmt.kind, stmt.range);
 }
 
+for field in unit.struct_fields() {
+    println!("Field: {}.{} : {}", field.struct_name, field.name, field.type_info.name);
+}
+
 println!("Header ends at byte: {}", unit.header_end());
 println!("Parse errors: {}", unit.has_errors());
 println!("Includes: {}", unit.includes().len());
@@ -206,35 +208,54 @@ println!("Typedefs: {}", unit.typedefs().len());
 println!("Called functions: {:?}", unit.function_calls());
 ```
 
+#### StructField
+
+```rust
+pub struct StructField {
+    pub struct_name: String,
+    pub name: String,
+    pub type_info: TypeInfo,
+    pub range: ByteRange,
+}
+```
+
 ## CLI Usage
 
 ```bash
 # Basic reduction
-slicer input.c
+slicer -i input.c
+
+# With explicit output
+slicer -i input.c -o output.c
 
 # With options
-slicer input.c --iterations 200 --timeout 10
+slicer -i input.c --iterations 200 --timeout 10
+
+# Wall-clock deadline for entire reduction
+slicer -i input.c --total-timeout 60
 
 # Disable coverage checking
-slicer input.c --no-coverage
+slicer -i input.c --no-coverage
 
 # Add compiler flags
-slicer input.c -f "-O2" -f "-std=c11"
+slicer -i input.c -f "-O2" -f "-std=c11"
 ```
 
 ### CLI Options
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `<source>` | | Input C source file (positional) |
-| `--iterations` | `-i` | Max reduction iterations (default: 100) |
+| `--input` | `-i` | Input C source file (required) |
+| `--output` | `-o` | Output file (default: `<input>.reduced.c`) |
+| `--iterations` | | Max reduction iterations (default: 100) |
 | `--timeout` | `-t` | Per-execution timeout in seconds (default: 5) |
+| `--total-timeout` | | Wall-clock deadline in seconds (default: 0 = disabled) |
 | `--no-coverage` | | Disable coverage-based validation |
 | `--flag` | `-f` | Extra compiler flag (repeatable) |
 
 ### Output
 
-The reduced file is written to `<source>.reduced.c` alongside the input file. The CLI also prints size and CPU cycle reduction statistics.
+The reduced file is written to `<input>.reduced.c` (or the path given by `--output`). The CLI prints size and CPU cycle reduction statistics.
 
 ## Available Passes
 
@@ -242,12 +263,16 @@ The reduced file is written to `<source>.reduced.c` alongside the input file. Th
 use slicer_passes::all_passes;
 
 // Returns Vec<Box<dyn ReductionPass>> containing (in order):
-// 1. DeadFunctionPass     — removes uncalled functions
-// 2. DeadCodePass         — removes unexecuted code (requires coverage)
-// 3. UnusedVariablePass   — removes unused variables (via clangd)
-// 4. StatementMergePass   — merges consecutive statements
-// 5. TypedefPass          — removes typedef declarations
-// 6. HeaderRemovalPass    — removes unused #includes (via clangd)
+//  1. DeadFunctionPass      — removes uncalled functions
+//  2. DeadCodePass          — removes unexecuted code (requires coverage)
+//  3. UnusedVariablePass    — removes unused variables (clangd -Wunused-variable)
+//  4. ArgumentRemovalPass   — removes unused parameters (clangd -Wunused-parameter)
+//  5. GlobalRemovalPass     — removes unused global declarations
+//  6. StructMemberRemovalPass — removes unused struct fields
+//  7. StatementMergePass    — merges consecutive statements
+//  8. TypedefPass           — removes typedef declarations
+//  9. EnumStructRemovalPass — removes unused enum/struct types
+// 10. HeaderRemovalPass     — removes unused #includes (clangd unused-includes)
 ```
 
 ## Error Handling
