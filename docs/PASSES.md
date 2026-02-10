@@ -2,39 +2,38 @@
 
 ## Overview
 
-Seven passes implement the `ReductionPass` trait. Passes run serially in priority order (higher priority first).
+Six passes implement the `ReductionPass` trait. Passes run sequentially in the order returned by `all_passes()`. The pipeline iterates all passes up to `max_iterations` times until no more progress is made.
+
+Two passes (`UnusedVariablePass` and `HeaderRemovalPass`) use **clangd** LSP diagnostics for analysis. One pass (`DeadCodePass`) requires **coverage data** from gcov.
 
 ## Pass Summary
 
-| Pass | Priority | Description |
-|------|----------|-------------|
-| `dead_function` | 100 | Removes uncalled functions |
-| `dead_code` | 90 | Removes dead code (post-return, unreachable) |
-| `statement` | 70 | Removes individual statements |
-| `statement_merge` | 65 | Merges consecutive statements |
-| `include` | 60 | Removes #include directives |
-| `typedef` | 50 | Removes unused typedefs |
-| `expression` | 30 | Simplifies expressions |
+| # | Pass | Description | Requires |
+|---|------|-------------|----------|
+| 1 | `DeadFunctionPass` | Removes uncalled functions | Parser |
+| 2 | `DeadCodePass` | Removes unexecuted code | Coverage data |
+| 3 | `UnusedVariablePass` | Removes unused variables | clangd |
+| 4 | `StatementMergePass` | Merges consecutive statements | Parser |
+| 5 | `TypedefPass` | Removes typedef declarations | Text scan |
+| 6 | `HeaderRemovalPass` | Removes unused `#include` directives | clangd |
 
 ## Pass Implementations
 
-### DeadFunctionPass (Priority 100)
+### DeadFunctionPass (#1)
 
 Removes functions that are never called.
 
 ```rust
 impl ReductionPass for DeadFunctionPass {
-    fn name(&self) -> &'static str { "dead_function" }
-    fn priority(&self) -> u32 { 100 }
-
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        let unit = parser.parse(source)?;
+    fn apply(&self, source: &str, _coverage: Option<&CoverageData>) -> Vec<Candidate> {
+        let unit = parser.parse(source);
         let called = unit.function_calls();
-        
+
         unit.functions()
-            .filter(|f| f.name != "main" && !called.contains(&f.name))
-            .map(|f| Candidate::removal(f.range)
-                .with_description(format!("remove unused function '{}'", f.name)))
+            .filter(|f| f.name != "main"
+                && !called.contains(&f.name)
+                && count_occurrences(source, &f.name) == 1)
+            .map(|f| Candidate::removal(extend_to_line(source, &f.range).to_range()))
             .collect()
     }
 }
@@ -42,181 +41,146 @@ impl ReductionPass for DeadFunctionPass {
 
 Skips:
 - `main` function
-- Functions that are called
-- Functions referenced elsewhere (possible function pointers)
+- Functions that appear in `function_calls()`
+- Functions whose name appears more than once in source (possible function pointer references)
 
-### DeadCodePass (Priority 90)
+### DeadCodePass (#2)
 
-Removes unreachable code:
-- Code after return statements
-- Unreachable branches (`if(0)`, always-false conditions)
+Removes statements that were never executed according to gcov coverage data.
 
 ```rust
 impl ReductionPass for DeadCodePass {
-    fn name(&self) -> &'static str { "dead_code" }
-    fn priority(&self) -> u32 { 90 }
+    fn apply(&self, source: &str, coverage: Option<&CoverageData>) -> Vec<Candidate> {
+        // Returns empty if coverage is None
+        let coverage = coverage?;
+        let unit = parser.parse(source);
 
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        let mut candidates = Vec::new();
-        candidates.extend(self.find_post_return_code(source));
-        candidates.extend(self.find_unreachable_branches(source));
-        candidates
+        // Find statements past header_end with 0 execution count
+        // Merge contiguous dead ranges into block removals
     }
 }
 ```
 
-### StatementPass (Priority 70)
+**Requires coverage data** — returns no candidates without it. Only considers statements after `header_end` (inside function bodies). Merges adjacent dead statements into single block-removal candidates for efficiency.
 
-Removes individual statements.
+### UnusedVariablePass (#3)
+
+Uses clangd LSP diagnostics to find and remove unused variables.
 
 ```rust
-impl ReductionPass for StatementPass {
-    fn name(&self) -> &'static str { "statement" }
-    fn priority(&self) -> u32 { 70 }
+impl ReductionPass for UnusedVariablePass {
+    fn apply(&self, source: &str, _coverage: Option<&CoverageData>) -> Vec<Candidate> {
+        // Query clangd for -Wunused-variable and -Wunused-but-set-variable
+        let unused_lines = lines_with_code(source, "-Wunused-variable", &[]);
+        let unused_set_lines = lines_with_code(source, "-Wunused-but-set-variable", &[]);
 
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        let unit = parser.parse(source)?;
-        
-        unit.statements()
-            .filter(|s| !s.text.starts_with("return"))
-            .map(|s| Candidate::removal(s.range)
-                .with_description("remove statement"))
-            .collect()
+        // For each flagged line:
+        //   - If it's a declaration statement → remove the line
+        //   - If it's a simple assignment expression → remove the line
     }
 }
 ```
 
-Skips:
-- Return statements
-- Statements in header region
+Leverages clangd's `-Wunused-variable` and `-Wunused-but-set-variable` diagnostic codes for precise detection. No false positives from clangd's semantic analysis.
 
-### StatementMergePass (Priority 65)
+### StatementMergePass (#4)
 
-Merges consecutive statements to reduce code size:
+Merges consecutive statements to reduce code size.
 
 ```rust
 impl ReductionPass for StatementMergePass {
-    fn name(&self) -> &'static str { "statement_merge" }
-    fn priority(&self) -> u32 { 65 }
+    fn apply(&self, source: &str, _coverage: Option<&CoverageData>) -> Vec<Candidate> {
+        let unit = parser.parse(source);
+        let stmts = unit.statements();
 
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        // Merge consecutive declarations of same type:
-        // int x; int y; → int x, y;
-        
-        // Merge declaration with immediate assignment:
-        // int x; x = 1; → int x = 1;
+        // Three merge strategies applied to consecutive statement pairs
     }
 }
 ```
 
 Transformations:
-- `int x; int y;` → `int x, y;`
-- `int x = 1; int y = 2;` → `int x = 1, y = 2;`
-- `int x; x = 42;` → `int x = 42;`
+- **Same-type declarations**: `int x; int y;` → `int x, y;`
+- **Declaration + assignment**: `int x; x = 42;` → `int x = 42;`
+- **Consecutive expressions**: `a = 1; b = 2;` → `a = 1, b = 2;`
 
-### IncludePass (Priority 60)
+### TypedefPass (#5)
 
-Removes `#include` directives.
-
-```rust
-impl ReductionPass for IncludePass {
-    fn name(&self) -> &'static str { "include" }
-    fn priority(&self) -> u32 { 60 }
-
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        source.lines()
-            .enumerate()
-            .filter(|(_, line)| line.trim().starts_with("#include"))
-            .map(|(line_num, line)| {
-                let range = calculate_line_range(source, line_num);
-                Candidate::removal(range)
-                    .with_description(format!("remove {}", line.trim()))
-            })
-            .collect()
-    }
-}
-```
-
-### TypedefPass (Priority 50)
-
-Removes unused typedef declarations.
+Removes `typedef` declarations.
 
 ```rust
 impl ReductionPass for TypedefPass {
-    fn name(&self) -> &'static str { "typedef" }
-    fn priority(&self) -> u32 { 50 }
-
-    fn apply(&self, source: &str) -> Vec<Candidate> {
+    fn apply(&self, source: &str, _coverage: Option<&CoverageData>) -> Vec<Candidate> {
         source.lines()
             .enumerate()
             .filter(|(_, line)| line.trim().starts_with("typedef "))
-            .filter_map(|(line_num, _)| {
-                let name = extract_typedef_name(line)?;
-                // Only remove if name appears just once (in the typedef itself)
-                if source.matches(&name).count() == 1 {
-                    Some(Candidate::removal(line_range)
-                        .with_description(format!("remove unused typedef '{}'", name)))
-                } else {
-                    None
-                }
-            })
+            .map(|(line_num, _)| Candidate::removal(line_range))
             .collect()
     }
 }
 ```
 
-### ExpressionSimplifyPass (Priority 30)
+Simple text-based scan. Generates removal candidates for every `typedef` line. The oracle validates whether each removal is safe (i.e., the typedef is actually unused).
 
-Simplifies expressions by replacing with constants.
+### HeaderRemovalPass (#6)
+
+Removes `#include` directives flagged as unused by clangd.
 
 ```rust
-impl ReductionPass for ExpressionSimplifyPass {
-    fn name(&self) -> &'static str { "expression" }
-    fn priority(&self) -> u32 { 30 }
+impl ReductionPass for HeaderRemovalPass {
+    fn apply(&self, source: &str, _coverage: Option<&CoverageData>) -> Vec<Candidate> {
+        // Query clangd for unused-includes diagnostics
+        let unused_lines = lines_with_code(source, "unused-includes", &[]);
 
-    fn apply(&self, source: &str) -> Vec<Candidate> {
-        let unit = parser.parse(source)?;
-        let mut candidates = Vec::new();
-        
-        for expr in unit.expressions() {
-            // Try replacing with 0 or 1
-            candidates.push(Candidate::replace("simplify to 0", expr.range, "0"));
-            candidates.push(Candidate::replace("simplify to 1", expr.range, "1"));
-        }
-        
-        candidates
+        // Generate removal candidates for #include lines on flagged lines
     }
 }
+```
+
+Uses clangd's `unused-includes` diagnostic for precise detection. Only removes includes that clangd confirms are unused, then the oracle provides an additional safety check.
+
+## Utility Modules
+
+### util.rs
+
+```rust
+/// Extends a ByteRange to cover complete lines (including trailing newline).
+pub fn extend_to_line(source: &str, range: &ByteRange) -> ByteRange;
+```
+
+### clangd.rs
+
+Full LSP client for clangd diagnostics:
+
+```rust
+pub struct Diagnostic {
+    pub line: usize,
+    pub code: String,
+    pub message: String,
+}
+
+/// Spawn clangd, open a source file, and collect all diagnostics.
+pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic>;
+
+/// Get line numbers that have a specific diagnostic code.
+pub fn lines_with_code(source: &str, code: &str, extra_flags: &[&str]) -> HashSet<usize>;
 ```
 
 ## Adding a Custom Pass
 
 ```rust
-use slicer_core::pass::{Candidate, ReductionPass};
+use slicer_core::{Candidate, CoverageData, ReductionPass};
 
 pub struct MyPass;
 
 impl ReductionPass for MyPass {
-    fn name(&self) -> &'static str { "my_pass" }
-    fn priority(&self) -> u32 { 40 }
-
-    fn apply(&self, source: &str) -> Vec<Candidate> {
+    fn apply(&self, source: &str, coverage: Option<&CoverageData>) -> Vec<Candidate> {
         // Generate candidates
         vec![]
     }
 }
 
-// Register with pipeline
-pipeline.register_pass(Box::new(MyPass));
-```
-
-## Configuration
-
-Enable/disable passes in config:
-
-```toml
-[passes]
-enabled = ["dead_function", "dead_code", "statement"]
-# Or use "all" for all passes
-enabled = ["all"]
+// Add to pipeline
+let mut passes = slicer_passes::all_passes();
+passes.push(Box::new(MyPass));
+let pipeline = Pipeline::new(passes, 100);
 ```
