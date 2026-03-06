@@ -16,16 +16,27 @@ impl ReductionPass for HeaderRemovalPass {
 
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
-            let is_include =
-                trimmed.starts_with("#include ") || trimmed.starts_with("#include\t");
+            let is_include = trimmed.starts_with("#include ") || trimmed.starts_with("#include\t");
 
             if is_include && unused_lines.contains(&line_num) {
-                let line_end = offset + line.len();
+                let mut line_end = offset + line.len();
+                // Check if the actual source has a \r before \n (CRLF handling)
+                if source.as_bytes().get(line_end) == Some(&b'\r') {
+                    line_end += 1;
+                }
                 let range = slicer_parser::ByteRange::new(offset, line_end);
                 let extended = extend_to_line(source, range);
                 candidates.push(Candidate::removal(extended.to_range()));
             }
-            offset += line.len() + 1;
+
+            // Advance offset exactly by the byte distance to next line start
+            offset += line.len();
+            if source.as_bytes().get(offset) == Some(&b'\r') {
+                offset += 1;
+            }
+            if source.as_bytes().get(offset) == Some(&b'\n') {
+                offset += 1;
+            }
         }
 
         candidates

@@ -9,9 +9,9 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-fn make_lsp_message(body: &serde_json::Value) -> Vec<u8> {
-    let content = serde_json::to_string(body).unwrap();
-    format!("Content-Length: {}\r\n\r\n{}", content.len(), content).into_bytes()
+fn make_lsp_message(body: &serde_json::Value) -> Option<Vec<u8>> {
+    let content = serde_json::to_string(body).ok()?;
+    Some(format!("Content-Length: {}\r\n\r\n{}", content.len(), content).into_bytes())
 }
 
 pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic> {
@@ -38,8 +38,13 @@ pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic> {
         "command": compile_cmd
     }]);
 
+    let compile_commands_json = match serde_json::to_string(&compile_commands) {
+        Ok(json) => json,
+        Err(_) => return Vec::new(),
+    };
+
     let cdb_path = temp_dir.path().join("compile_commands.json");
-    if std::fs::write(&cdb_path, serde_json::to_string(&compile_commands).unwrap()).is_err() {
+    if std::fs::write(&cdb_path, compile_commands_json).is_err() {
         return Vec::new();
     }
 
@@ -58,7 +63,10 @@ pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic> {
         Err(_) => return Vec::new(),
     };
 
-    let stdin = child.stdin.as_mut().unwrap();
+    let stdin = match child.stdin.as_mut() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
 
     let init = serde_json::json!({
         "jsonrpc": "2.0",
@@ -94,9 +102,15 @@ pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic> {
         }
     });
 
-    let _ = stdin.write_all(&make_lsp_message(&init));
-    let _ = stdin.write_all(&make_lsp_message(&initialized));
-    let _ = stdin.write_all(&make_lsp_message(&did_open));
+    if let Some(msg) = make_lsp_message(&init) {
+        let _ = stdin.write_all(&msg);
+    }
+    if let Some(msg) = make_lsp_message(&initialized) {
+        let _ = stdin.write_all(&msg);
+    }
+    if let Some(msg) = make_lsp_message(&did_open) {
+        let _ = stdin.write_all(&msg);
+    }
     let _ = stdin.flush();
 
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -113,8 +127,12 @@ pub fn get_diagnostics(source: &str, extra_flags: &[&str]) -> Vec<Diagnostic> {
         "params": null
     });
 
-    let _ = stdin.write_all(&make_lsp_message(&shutdown));
-    let _ = stdin.write_all(&make_lsp_message(&exit));
+    if let Some(msg) = make_lsp_message(&shutdown) {
+        let _ = stdin.write_all(&msg);
+    }
+    if let Some(msg) = make_lsp_message(&exit) {
+        let _ = stdin.write_all(&msg);
+    }
     let _ = stdin.flush();
 
     let stdin_handle = child.stdin.take();
@@ -169,7 +187,11 @@ fn parse_diagnostics(stdout_data: &[u8]) -> Vec<Diagnostic> {
     diagnostics
 }
 
-pub fn lines_with_code(source: &str, code: &str, extra_flags: &[&str]) -> std::collections::HashSet<usize> {
+pub fn lines_with_code(
+    source: &str,
+    code: &str,
+    extra_flags: &[&str],
+) -> std::collections::HashSet<usize> {
     get_diagnostics(source, extra_flags)
         .into_iter()
         .filter(|d| d.code == code)
@@ -185,7 +207,10 @@ mod tests {
     fn test_get_diagnostics_unused_include() {
         let source = "#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    printf(\"hi\");\n    return 0;\n}\n";
         let diags = get_diagnostics(source, &[]);
-        let unused: Vec<_> = diags.iter().filter(|d| d.code == "unused-includes").collect();
+        let unused: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == "unused-includes")
+            .collect();
         assert!(!unused.is_empty(), "should detect unused stdlib.h");
         assert!(
             unused.iter().all(|d| d.line != 0),
@@ -197,11 +222,17 @@ mod tests {
     fn test_get_diagnostics_unused_variable() {
         let source = "int main() {\n    int x = 1;\n    int y = 2;\n    return x;\n}\n";
         let diags = get_diagnostics(source, &["-Wall"]);
-        let unused: Vec<_> = diags.iter().filter(|d| d.code == "-Wunused-variable").collect();
+        let unused: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == "-Wunused-variable")
+            .collect();
         assert!(
             !unused.is_empty(),
             "should detect unused variable y, got: {:?}",
-            diags.iter().map(|d| format!("{}:{}", d.code, d.message)).collect::<Vec<_>>()
+            diags
+                .iter()
+                .map(|d| format!("{}:{}", d.code, d.message))
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -228,11 +228,14 @@ run_test() {
     
     # Run reducer
     local reducer_output="$TEST_DIR/${test_name}.reducer.log"
+    local start_time=$(date +%s.%N)
     if ! timeout 120s "$SLICER" -i "$pp_file" -o "$reduced_file" --no-coverage --timeout $TIMEOUT_SECS --total-timeout 60 > "$reducer_output" 2>&1; then
         echo "SKIP reducer_failed $(tail -1 $reducer_output 2>/dev/null)" > "$result_file"
         rm -f "$src_file" "$pp_file" "$orig_bin" "$orig_stdout" "$orig_stderr" "$reducer_output"
         return 0
     fi
+    local end_time=$(date +%s.%N)
+    local red_time=$(echo "$end_time - $start_time" | bc | awk '{printf "%.2f", $0}')
     rm -f "$reducer_output"
     
     if [ ! -f "$reduced_file" ]; then
@@ -338,8 +341,8 @@ run_test() {
     # Calculate cycle ratio after adjustment
     local final_ratio=$(echo "scale=2; $final_cycles * 100 / $orig_cycles" | bc)
     
-    # Report: src_lines (original) pp_lines (preprocessed) final_lines reduction% orig_cycles final_cycles cycle_ratio padding_added
-    echo "PASS $src_lines $orig_lines $final_lines $reduction $orig_cycles $final_cycles $final_ratio $padding_added" > "$result_file"
+    # Report: src_lines (original) pp_lines (preprocessed) final_lines reduction% orig_cycles final_cycles cycle_ratio padding_added red_time
+    echo "PASS $src_lines $orig_lines $final_lines $reduction $orig_cycles $final_cycles $final_ratio $padding_added $red_time" > "$result_file"
     
     # Cleanup successful tests
     #rm -f "$src_file" "$pp_file" "$reduced_file" "$final_file" \
@@ -369,6 +372,7 @@ TOTAL_FINAL_LINES=0
 TOTAL_ORIG_CYCLES=0
 TOTAL_FINAL_CYCLES=0
 PADDING_COUNT=0
+TOTAL_TIME=0
 
 for i in $(seq 1 $NUM_TESTS); do
     result_file="$TEST_DIR/test_$(printf '%03d' $i).result"
@@ -379,7 +383,7 @@ for i in $(seq 1 $NUM_TESTS); do
         case "$status" in
             PASS)
                 ((PASSED++))
-                # Format: PASS src_lines pp_lines final_lines reduction% orig_cycles final_cycles cycle_ratio padding_added
+                # Format: PASS src_lines pp_lines final_lines reduction% orig_cycles final_cycles cycle_ratio padding_added red_time
                 src_l=$(echo "$result" | cut -d' ' -f2)
                 pp_l=$(echo "$result" | cut -d' ' -f3)
                 final_l=$(echo "$result" | cut -d' ' -f4)
@@ -388,15 +392,17 @@ for i in $(seq 1 $NUM_TESTS); do
                 final_c=$(echo "$result" | cut -d' ' -f7)
                 ratio=$(echo "$result" | cut -d' ' -f8)
                 padded=$(echo "$result" | cut -d' ' -f9)
+                red_time=$(echo "$result" | cut -d' ' -f10)
                 
                 TOTAL_ORIG_LINES=$((TOTAL_ORIG_LINES + pp_l))
                 TOTAL_FINAL_LINES=$((TOTAL_FINAL_LINES + final_l))
                 TOTAL_ORIG_CYCLES=$((TOTAL_ORIG_CYCLES + orig_c))
                 TOTAL_FINAL_CYCLES=$((TOTAL_FINAL_CYCLES + final_c))
+                TOTAL_TIME=$(echo "$TOTAL_TIME + $red_time" | bc | awk '{printf "%.2f", $0}')
                 
                 [ "$padded" = "yes" ] && ((PADDING_COUNT++))
                 
-                echo -e "Test $i: ${GREEN}PASSED${NC} (src:$src_l pp:$pp_l -> $final_l, ${red}% reduction, cycles: ${ratio}%, padded: $padded)" | tee -a "$RESULTS_FILE"
+                echo -e "Test $i: ${GREEN}PASSED${NC} (src:$src_l pp:$pp_l -> $final_l, ${red}% reduction, cycles: ${ratio}%, padded: $padded, time: ${red_time}s)" | tee -a "$RESULTS_FILE"
                 ;;
             FAIL)
                 ((FAILED++))
@@ -417,9 +423,11 @@ done
 if [ $PASSED -gt 0 ]; then
     AVG_REDUCTION=$((100 - (TOTAL_FINAL_LINES * 100 / TOTAL_ORIG_LINES)))
     AVG_CYCLE_RATIO=$(echo "scale=1; $TOTAL_FINAL_CYCLES * 100 / $TOTAL_ORIG_CYCLES" | bc)
+    AVG_TIME=$(echo "scale=2; $TOTAL_TIME / $PASSED" | bc)
 else
     AVG_REDUCTION=0
     AVG_CYCLE_RATIO=0
+    AVG_TIME=0
 fi
 
 # Summary
@@ -434,6 +442,7 @@ echo "=== Performance ===" | tee -a "$RESULTS_FILE"
 echo "Average code reduction: ${AVG_REDUCTION}%" | tee -a "$RESULTS_FILE"
 echo "Average CPU cycle ratio: ${AVG_CYCLE_RATIO}% of original" | tee -a "$RESULTS_FILE"
 echo "Tests requiring cycle padding: $PADDING_COUNT" | tee -a "$RESULTS_FILE"
+echo "Average reduction time: ${AVG_TIME}s" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
 if [ $FAILED -gt 0 ]; then
