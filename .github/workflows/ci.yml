@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TEST_THREADS: "1"
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang clangd gcc gcovr
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: Build release binary
+        run: cargo build --release --workspace
+
+      - name: CLI smoke test
+        shell: bash
+        run: |
+          target/release/slicer \
+            -i tests/integration/test_no_reduction.c \
+            -o /tmp/test_no_reduction.reduced.c \
+            --no-coverage \
+            --timeout 5 \
+            --total-timeout 20
+          test -s /tmp/test_no_reduction.reduced.c
