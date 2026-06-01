@@ -50,7 +50,7 @@ impl Pipeline {
                 }
 
                 let mut candidates = pass.apply(&current, coverage);
-                candidates.sort_by(|a, b| b.range.start.cmp(&a.range.start));
+                candidates.sort_by_key(|b| std::cmp::Reverse(b.range.start));
 
                 for candidate in &candidates {
                     if let Some(timeout) = self.total_timeout {
