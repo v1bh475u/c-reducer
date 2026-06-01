@@ -1,0 +1,70 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Number of reducer iterations per fixture
+        required: false
+        default: "100"
+      total_timeout:
+        description: Total reducer timeout per fixture in seconds
+        required: false
+        default: "60"
+      include_csmith:
+        description: Run the existing CSmith stress helper after fixture benchmarks
+        required: false
+        default: "false"
+        type: boolean
+  schedule:
+    - cron: "0 3 * * 0"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TEST_THREADS: "1"
+
+jobs:
+  benchmark:
+    name: Linux benchmark report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang clangd gcc gcovr linux-tools-common linux-tools-generic bc csmith
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fixture benchmarks
+        run: |
+          python3 scripts/benchmark.py \
+            --fixtures tests/integration \
+            --out docs/benchmarks/latest \
+            --iterations "${{ github.event.inputs.iterations || '100' }}" \
+            --timeout 5 \
+            --total-timeout "${{ github.event.inputs.total_timeout || '60' }}" \
+            --no-coverage
+
+      - name: Generate graphs
+        run: python3 scripts/plot_benchmarks.py docs/benchmarks/latest/results.json
+
+      - name: Generate Markdown report
+        run: python3 scripts/summarize_benchmarks.py docs/benchmarks/latest/results.json
+
+      - name: Run CSmith stress suite
+        if: ${{ github.event.inputs.include_csmith == 'true' }}
+        run: bash tests/run_csmith_tests.sh 10 2
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: docs/benchmarks/latest
