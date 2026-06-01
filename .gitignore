@@ -40,6 +40,13 @@ tests/csmith_tests/platform.info
 # Binary documents
 docs/*.pdf
 
+# Generated benchmark reports
+docs/benchmarks/latest/
+
 # Temporary files
 *.tmp
 *.bak
+
+# Python caches
+__pycache__/
+*.py[cod]
