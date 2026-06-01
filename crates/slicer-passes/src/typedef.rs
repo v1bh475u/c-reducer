@@ -15,11 +15,7 @@ impl ReductionPass for TypedefPass {
             let trimmed = line.trim();
 
             if trimmed.starts_with("typedef ") {
-                let line_start: usize = source
-                    .lines()
-                    .take(line_num)
-                    .map(|l| l.len() + 1)
-                    .sum();
+                let line_start: usize = source.lines().take(line_num).map(|l| l.len() + 1).sum();
 
                 let typedef_end = if let Some(semi_pos) = source[line_start..].find(';') {
                     line_start + semi_pos + 1

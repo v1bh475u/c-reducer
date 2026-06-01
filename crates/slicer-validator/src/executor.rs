@@ -75,7 +75,7 @@ impl Executor {
                         stderr: output.1,
                         exit_code: status.code(),
                     });
-                }
+                },
                 None => {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
@@ -89,7 +89,7 @@ impl Executor {
                         });
                     }
                     std::thread::sleep(Duration::from_millis(10));
-                }
+                },
             }
         }
     }
@@ -122,7 +122,9 @@ mod tests {
         let result = compiler.compile("int main() { return 42; }").unwrap();
         assert!(result.success);
         let executor = Executor::default();
-        let exec_result = executor.execute(result.binary_path.as_ref().unwrap()).unwrap();
+        let exec_result = executor
+            .execute(result.binary_path.as_ref().unwrap())
+            .unwrap();
         assert!(exec_result.completed);
         assert_eq!(exec_result.exit_code, Some(42));
     }
@@ -134,7 +136,9 @@ mod tests {
         let result = compiler.compile(source).unwrap();
         if result.success {
             let executor = Executor::default();
-            let exec_result = executor.execute(result.binary_path.as_ref().unwrap()).unwrap();
+            let exec_result = executor
+                .execute(result.binary_path.as_ref().unwrap())
+                .unwrap();
             assert!(exec_result.completed);
             assert_eq!(exec_result.stdout.trim(), "hello");
         }

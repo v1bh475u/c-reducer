@@ -111,9 +111,7 @@ impl ReductionPass for StatementMergePass {
         let stmts: Vec<_> = unit
             .statements()
             .iter()
-            .filter(|s| {
-                s.range.start >= header_end && !matches!(s.kind, StatementKind::Compound)
-            })
+            .filter(|s| s.range.start >= header_end && !matches!(s.kind, StatementKind::Compound))
             .collect();
 
         let mut i = 0;
@@ -126,9 +124,7 @@ impl ReductionPass for StatementMergePass {
                     let run_start = i;
                     let mut j = i + 1;
 
-                    while j < stmts.len()
-                        && matches!(stmts[j].kind, StatementKind::Declaration)
-                    {
+                    while j < stmts.len() && matches!(stmts[j].kind, StatementKind::Declaration) {
                         if let Some(v) = Self::find_var_decl(declarations, &stmts[j].range)
                             .and_then(|d| Self::extract_var_decl(d, source))
                         {
@@ -150,10 +146,8 @@ impl ReductionPass for StatementMergePass {
                             })
                             .collect();
                         let merged = format!("{} {};", run[0].type_name, parts.join(", "));
-                        let range = ByteRange::new(
-                            stmts[run_start].range.start,
-                            stmts[j - 1].range.end,
-                        );
+                        let range =
+                            ByteRange::new(stmts[run_start].range.start, stmts[j - 1].range.end);
                         candidates.push(Candidate::new(range.to_range(), merged));
                         i = j;
                         continue;
@@ -170,10 +164,8 @@ impl ReductionPass for StatementMergePass {
                                         "{} {} = {};",
                                         run[0].type_name, run[0].var_name, value
                                     );
-                                    let range = ByteRange::new(
-                                        stmts[i].range.start,
-                                        stmts[j].range.end,
-                                    );
+                                    let range =
+                                        ByteRange::new(stmts[i].range.start, stmts[j].range.end);
                                     candidates.push(Candidate::new(range.to_range(), merged));
                                 }
                             }
@@ -203,10 +195,8 @@ impl ReductionPass for StatementMergePass {
 
                     if let Some(bodies) = bodies {
                         let merged = format!("{};", bodies.join(", "));
-                        let range = ByteRange::new(
-                            stmts[run_start].range.start,
-                            stmts[j - 1].range.end,
-                        );
+                        let range =
+                            ByteRange::new(stmts[run_start].range.start, stmts[j - 1].range.end);
                         candidates.push(Candidate::new(range.to_range(), merged));
                     }
                 }

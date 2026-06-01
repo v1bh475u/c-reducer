@@ -4,8 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-static LINE_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\s*([#\d-]+):\s*(\d+):").unwrap());
+static LINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*([#\d-]+):\s*(\d+):").unwrap());
 
 use crate::error::{ValidationError, ValidationResult};
 

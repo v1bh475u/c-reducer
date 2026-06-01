@@ -1,7 +1,6 @@
+use regex::Regex;
 use std::path::Path;
 use std::process::Command;
-use regex::Regex;
-
 
 pub fn measure_cycles(binary_path: &Path) -> Option<u64> {
     let output = Command::new("perf")
@@ -22,7 +21,8 @@ pub fn pad_for_cycles(
     reduced_cycles: u64,
     tolerance_pct: f64,
 ) -> Option<String> {
-    let delta_pct = ((reduced_cycles as f64 - original_cycles as f64) / original_cycles as f64) * 100.0;
+    let delta_pct =
+        ((reduced_cycles as f64 - original_cycles as f64) / original_cycles as f64) * 100.0;
 
     if delta_pct.abs() <= tolerance_pct {
         return None;

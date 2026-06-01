@@ -117,7 +117,7 @@ impl Oracle {
                 if unit.has_errors() {
                     return Ok(false);
                 }
-            }
+            },
             Err(_) => return Ok(false),
         }
 
@@ -186,7 +186,7 @@ impl Oracle {
                 Ok(reduced_coverage) => {
                     let missing = missing_coverage(original_coverage, &reduced_coverage);
                     Ok(missing.is_empty())
-                }
+                },
                 Err(_) => Ok(false),
             }
         } else {

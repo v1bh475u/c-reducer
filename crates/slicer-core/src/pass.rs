@@ -1,5 +1,5 @@
-use std::ops::Range;
 use crate::context::CoverageData;
+use std::ops::Range;
 
 #[derive(Debug, Clone)]
 pub struct Candidate {
@@ -9,11 +9,17 @@ pub struct Candidate {
 
 impl Candidate {
     pub fn removal(range: Range<usize>) -> Self {
-        Self { range, replacement: String::new() }
+        Self {
+            range,
+            replacement: String::new(),
+        }
     }
 
     pub fn new(range: Range<usize>, replacement: impl Into<String>) -> Self {
-        Self { range, replacement: replacement.into() }
+        Self {
+            range,
+            replacement: replacement.into(),
+        }
     }
 
     pub fn apply(&self, source: &str) -> Option<String> {
