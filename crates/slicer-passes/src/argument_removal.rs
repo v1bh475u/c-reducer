@@ -35,7 +35,19 @@ impl ReductionPass for ArgumentRemovalPass {
             }
 
             for (param_idx, param) in func.parameters.iter().enumerate() {
-                if param.name.is_empty() || !unused_param_names.contains(&param.name) {
+                if param.name.is_empty() {
+                    continue;
+                }
+
+                if unused_param_names.is_empty() {
+                    let func_text = match func.range.extract(source) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    if identifier_occurs(func_text, &param.name) {
+                        continue;
+                    }
+                } else if !unused_param_names.contains(&param.name) {
                     continue;
                 }
 
@@ -170,6 +182,32 @@ fn split_params(text: &str) -> Vec<&str> {
     }
     parts.push(trimmed[start..].trim());
     parts
+}
+
+fn identifier_occurs(text: &str, ident: &str) -> bool {
+    let bytes = text.as_bytes();
+    let name = ident.as_bytes();
+    if name.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i + name.len() <= bytes.len() {
+        if &bytes[i..i + name.len()] == name {
+            let before = if i == 0 { b' ' } else { bytes[i - 1] };
+            let after = if i + name.len() >= bytes.len() {
+                b' '
+            } else {
+                bytes[i + name.len()]
+            };
+            let before_ok = !(before.is_ascii_alphanumeric() || before == b'_');
+            let after_ok = !(after.is_ascii_alphanumeric() || after == b'_');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 #[cfg(test)]
